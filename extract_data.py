@@ -5,6 +5,7 @@ import click
 import logging
 from classification import setup_logging
 import itertools
+from nltk import tokenize
 
 TRANSCRIPT_PATH = os.environ.get("TRANSCRIPT_PATH")
 logger = logging.getLogger(__name__)
@@ -88,11 +89,12 @@ def thom_reut_convert(ticker:str) -> List[str]:
 def extract_sentences(locations:List[str]) -> str:
     sentences = []
     for file in locations:
-        logger.info(f'extracting sentences from{file}')
+        logger.info(f'extracting sentences from {file}')
         df = pd.read_csv(os.path.join(TRANSCRIPT_PATH, file))
-        new_sentence = df['transcript'].apply(lambda x: x.split('.')).to_list()
-        sentences += list(itertools.chain.from_iterable(new_sentence))
-    sentences = [sentence for sentence in sentences if sentence]
+        new_sentence = df['transcript'].apply(tokenize.sent_tokenize).to_list()
+
+        sentences += new_sentence
+    sentences  = list(itertools.chain.from_iterable(sentences))
     return sentences
 
 
@@ -107,12 +109,13 @@ def main(ticker:str, new_transcripts:bool):
     else:
         path = TRANSCRIPT_PATH
         csv_list = [x for x in os.listdir(path) if x[-4:] == '.csv']
-        locations = [x for x in csv_list if 'speakers' not in x or 'sentence' not in x]
+        locations = [x for x in csv_list if 'speakers' not in x and 'sentence' not in x]
     sentences = extract_sentences(locations)
     df = pd.DataFrame()
     df['sentence'] = sentences
     df['guidance/useless'] = [None]*len(sentences)
     df.to_csv(TRANSCRIPT_PATH +'/sentences.csv')
+    logger.info('extracted sentences to sentences.csv')
 
 
 if __name__ == "__main__":
