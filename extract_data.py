@@ -1,11 +1,19 @@
 import os
+from typing import List
 import pandas as pd
+import click
+import logging
+from classification import setup_logging
+import itertools
 
 TRANSCRIPT_PATH = os.environ.get("TRANSCRIPT_PATH")
+logger = logging.getLogger(__name__)
 
-def thom_reut_convert(ticker):
+
+def thom_reut_convert(ticker:str) -> List[str]:
     path = os.path.join(TRANSCRIPT_PATH, ticker)
     txt_list = [x for x in os.listdir(path) if x[-4:] == '.txt']
+    locations = []
     for f in txt_list:
         out = ''
         with open(os.path.join(path, f)) as txt_file:
@@ -13,23 +21,19 @@ def thom_reut_convert(ticker):
             # parse date, quarter, year of call 
             qt_txt = [x for x in txt.split('\n') if 'Earnings' in x][0]
             quarter = qt_txt.split()[0]   # not using right now
-            year = qt_txt.split()[1]     # not using right now
-#             date_idx = txt.find('EVENT DATE/TIME: ') + len('EVENT DATE/TIME: ')
-#             date_idx_end = date_idx + 50  # static charater count for length of date
-#             date = parse(txt[date_idx:date_idx_end].split('\n')[0]).strftime('%m-%d-%y')
-            comp_name = qt_txt.split(' Earnings Call')[0][qt_txt.split(' Earnings Call')[0].find(year)+ len(year) + 1:]
-    
-   # parse names of call participants, separated into corporate participants and conference participants
+            year = qt_txt.split()[1]
             corp_idx = txt.find('Corporate Participants')+len('Corporate Participants')
-            corp_idx_end = txt.find('Conference Call Participiants')
-            conf_idx = txt.find('Conference Call Participiants') + len('Conference Call Participiants')
+            corp_idx_end = txt.find('Conference Call Participants')
+            conf_idx = txt.find('Conference Call Participants') + len('Conference Call Participants')
             conf_idx_end = txt.find('Presentation')
-            corp_txt = txt[corp_idx:corp_idx_end].split('\n')
+            
+            corp_txt = txt[corp_idx:corp_idx_end].split('\n') 
             corp_name = [x.strip() for x in corp_txt if x.strip() != '']
             corp_people = []
-            for i, corp, in enumerate(corp_name):
+            for i, corp in enumerate(corp_name):
                 if '*' in corp:
                     corp_people.append(tuple([corp, corp_name[i+1]]))
+
             corp_name = [(x[0].replace('*','').strip(), x[1]) for x in corp_people]
             conf_txt = txt[conf_idx:conf_idx_end].split('\n')
             conf_name = [x.strip() for x in conf_txt if x.strip() != '']
@@ -39,20 +43,18 @@ def thom_reut_convert(ticker):
                     conf_people.append(tuple([conf, conf_name[i+1]]))
             conf_name = [(x[0].replace('*','').strip(), x[1]) for x in conf_people]
             speaker_list = corp_name + conf_name
-
             columns = ['participiant', 'occupation']
             df_speaker = pd.DataFrame(speaker_list, columns=columns)
             df_speaker.to_csv(os.path.join(path, ticker + '_' + quarter +'_' + year + '_speakers.csv'), index=False)
 
-            # remove footer
             if 'Definitions' in txt:
                 txt = txt[0:txt.find('Definitions')]
             elif 'Diclaimer' in txt:
                 txt = txt[0:txt.find('Disclaimer')]
                 
             if 'PRESENTATION SUMMARY' in txt:
+                logger.info('need to include presentation sentences')
                 continue
-            
             
             elif 'Presentation' in txt:
                 txt = txt[txt.find('Presentation')+len('Presentation'):]
@@ -75,7 +77,43 @@ def thom_reut_convert(ticker):
                 df = pd.DataFrame(columns=['speaker', 'transcript'])
                 df['speaker'] = speakers
                 df['transcript'] = filtered_txt
-                
-             
-        df.to_csv(os.path.join(path, ticker + '_' + quarter + '_' +year + '.csv'), index=False)
-        print('converted: ' + os.path.join(path, ticker + '_' + quarter + "_" + year + '.csv'))
+
+                location = os.path.join(TRANSCRIPT_PATH, ticker + '_' + quarter + '_' +year + '.csv')     
+                df.to_csv(location, index=False)
+                logger.info('converted: ' + location)
+                locations += [location]
+    return locations
+
+
+def extract_sentences(locations:List[str]) -> str:
+    sentences = []
+    for file in locations:
+        logger.info(f'extracting sentences from{file}')
+        df = pd.read_csv(os.path.join(TRANSCRIPT_PATH, file))
+        new_sentence = df['transcript'].apply(lambda x: x.split('.')).to_list()
+        sentences += list(itertools.chain.from_iterable(new_sentence))
+    sentences = [sentence for sentence in sentences if sentence]
+    return sentences
+
+
+@click.command()
+@click.option('--ticker','-t',required=True,type=str,help='ticker for the companies earnings call')
+@click.option('--new-transcripts/--reuse', '-nt/-r',type=bool,required=True,help='adding new transcripts or using existing ones')
+def main(ticker:str, new_transcripts:bool):
+    setup_logging()
+    locations = []
+    if new_transcripts:
+        locations = thom_reut_convert(ticker)
+    else:
+        path = TRANSCRIPT_PATH
+        csv_list = [x for x in os.listdir(path) if x[-4:] == '.csv']
+        locations = [x for x in csv_list if 'speakers' not in x or 'sentence' not in x]
+    sentences = extract_sentences(locations)
+    df = pd.DataFrame()
+    df['sentence'] = sentences
+    df['guidance/useless'] = [None]*len(sentences)
+    df.to_csv(TRANSCRIPT_PATH +'/sentences.csv')
+
+
+if __name__ == "__main__":
+    main()
